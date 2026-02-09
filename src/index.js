@@ -22,6 +22,11 @@ const db = getFirestore();
 
 const app = express();
 
+const adminEmails = (process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+
 const allowedOrigins = (process.env.CORS_ORIGIN || "*")
   .split(",")
   .map((origin) => origin.trim())
@@ -134,6 +139,17 @@ const requireAuth = async (req, res, next) => {
   }
 };
 
+const requireAdmin = (req, res, next) => {
+  if (!adminEmails.length) {
+    return res.status(403).json({ error: "Admin access not configured" });
+  }
+  const email = (req.user?.email || "").toLowerCase();
+  if (!adminEmails.includes(email)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  return next();
+};
+
 const generateReferralCode = () => {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -173,6 +189,8 @@ const serializeUser = (doc) => {
     plan: doc.plan || "basic",
     referralCode: doc.referralCode || "",
     referredBy: doc.referredBy || null,
+    disabled: !!doc.disabled,
+    createdAt: doc.createdAt || null,
   };
 };
 
@@ -394,6 +412,69 @@ app.post("/subscription/upgrade", requireAuth, async (req, res) => {
   );
 
   res.json({ ok: true, plan });
+});
+
+app.get("/admin/users", requireAuth, requireAdmin, async (req, res) => {
+  const limit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 200);
+  const cursor = req.query.cursor;
+
+  let query = db.collection("users").orderBy("createdAt", "desc").limit(limit);
+  if (cursor) {
+    const cursorSnap = await db.collection("users").doc(cursor).get();
+    if (cursorSnap.exists) {
+      query = query.startAfter(cursorSnap);
+    }
+  }
+
+  const snap = await query.get();
+  const users = snap.docs.map((doc) => ({ id: doc.id, ...serializeUser(doc.data()) }));
+  const nextCursor = snap.docs.length ? snap.docs[snap.docs.length - 1].id : null;
+
+  res.json({ users, nextCursor });
+});
+
+app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
+  const schema = z
+    .object({
+      plan: z.enum(["basic", "pro", "elite"]).optional(),
+      disabled: z.boolean().optional(),
+      fullName: z.string().min(2).optional(),
+    })
+    .safeParse(req.body || {});
+
+  if (!schema.success) {
+    return res.status(400).json({ error: "Invalid payload" });
+  }
+
+  const { plan, disabled, fullName } = schema.data;
+  const uid = req.params.uid;
+
+  if (typeof disabled === "boolean") {
+    await auth.updateUser(uid, { disabled });
+  }
+
+  const updateData = {
+    ...(plan ? { plan } : {}),
+    ...(typeof disabled === "boolean" ? { disabled } : {}),
+    ...(fullName ? { fullName } : {}),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  if (Object.keys(updateData).length) {
+    await db.collection("users").doc(uid).set(updateData, { merge: true });
+  }
+
+  if (plan) {
+    await db.collection("stats").doc(uid).set(
+      {
+        plan,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {

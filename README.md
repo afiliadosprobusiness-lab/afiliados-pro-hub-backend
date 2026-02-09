@@ -12,6 +12,7 @@ Usa Firebase Admin SDK para autenticar y leer/escribir en Firestore.
 - `FIREBASE_SERVICE_ACCOUNT`: JSON del service account en una sola linea.
 - `CORS_ORIGIN`: origen permitido (ej: `https://tu-dominio.vercel.app`).
 - `PORT`: puerto (por defecto 8080).
+- `ADMIN_EMAILS`: lista separada por comas de correos con acceso al panel admin.
 
 ## Comandos
 ```bash
@@ -33,3 +34,5 @@ gcloud run deploy afiliados-pro-hub-backend --source . --region us-central1 --al
 - `GET /network`
 - `GET /subscription`
 - `POST /subscription/upgrade`
+- `GET /admin/users`
+- `PATCH /admin/users/:uid`
