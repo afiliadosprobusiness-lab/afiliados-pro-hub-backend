@@ -36,3 +36,4 @@ gcloud run deploy afiliados-pro-hub-backend --source . --region us-central1 --al
 - `POST /subscription/upgrade`
 - `GET /admin/users`
 - `PATCH /admin/users/:uid`
+- `DELETE /admin/users/:uid`

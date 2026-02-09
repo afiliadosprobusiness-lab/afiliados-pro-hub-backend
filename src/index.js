@@ -477,6 +477,30 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
+  const uid = req.params.uid;
+
+  try {
+    await auth.deleteUser(uid);
+  } catch (error) {
+    if (error?.code !== "auth/user-not-found") {
+      return res.status(500).json({ error: "Failed to delete auth user" });
+    }
+  }
+
+  await db.collection("users").doc(uid).delete();
+  await db.collection("stats").doc(uid).delete();
+
+  const networkSnap = await db.collection("users").doc(uid).collection("network").get();
+  if (!networkSnap.empty) {
+    const batch = db.batch();
+    networkSnap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+
+  res.json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`);
 });
