@@ -1064,6 +1064,12 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
   const { plan, disabled, fullName } = schema.data;
   const uid = req.params.uid;
 
+  const targetSnap = await db.collection("users").doc(uid).get();
+  const targetEmail = targetSnap.exists ? String(targetSnap.data()?.email || "").toLowerCase() : "";
+  if (targetEmail && adminEmails.includes(targetEmail)) {
+    return res.status(403).json({ error: "Cannot modify owner account" });
+  }
+
   if (typeof disabled === "boolean") {
     await auth.updateUser(uid, { disabled });
   }
@@ -1094,6 +1100,12 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
 
 app.delete("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
   const uid = req.params.uid;
+
+  const targetSnap = await db.collection("users").doc(uid).get();
+  const targetEmail = targetSnap.exists ? String(targetSnap.data()?.email || "").toLowerCase() : "";
+  if (targetEmail && adminEmails.includes(targetEmail)) {
+    return res.status(403).json({ error: "Cannot delete owner account" });
+  }
 
   try {
     await auth.deleteUser(uid);
