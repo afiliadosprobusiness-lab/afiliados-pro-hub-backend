@@ -355,12 +355,19 @@ const getUpline = async (uid) => {
 };
 
 const refreshPendingCommissions = async (uid) => {
-  const pendingSnap = await db
-    .collection("commissions")
-    .where("beneficiaryId", "==", uid)
-    .where("status", "==", "pending")
-    .where("holdUntil", "<=", Timestamp.now())
-    .get();
+  let pendingSnap;
+  try {
+    pendingSnap = await db
+      .collection("commissions")
+      .where("beneficiaryId", "==", uid)
+      .where("status", "==", "pending")
+      .where("holdUntil", "<=", Timestamp.now())
+      .get();
+  } catch (error) {
+    // Missing index or transient firestore errors should not crash the service.
+    console.error("refreshPendingCommissions failed:", error?.message || error);
+    return;
+  }
 
   if (pendingSnap.empty) return;
 
@@ -489,59 +496,89 @@ app.get("/me", requireAuth, async (req, res) => {
   return res.json({ user: serializeUser(userSnap.data()) });
 });
 
-app.get("/dashboard", requireAuth, async (req, res) => {
+app.patch("/me", requireAuth, async (req, res) => {
+  const schema = z
+    .object({
+      fullName: z.string().min(2).optional(),
+      email: z.string().email().optional(),
+    })
+    .safeParse(req.body || {});
+
+  if (!schema.success) {
+    return res.status(400).json({ error: "Invalid payload" });
+  }
+
   const uid = req.user.uid;
-  await refreshPendingCommissions(uid);
-  const [userSnap, statsSnap, activitySnap] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db.collection("stats").doc(uid).get(),
-    db.collection("users").doc(uid).collection("activity").orderBy("createdAt", "desc").limit(8).get(),
-  ]);
+  const { fullName, email } = schema.data;
+  const updates = {
+    ...(fullName ? { fullName } : {}),
+    ...(email ? { email } : {}),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
 
-  const user = userSnap.data();
-  const stats = statsSnap.data() || {};
+  await db.collection("users").doc(uid).set(updates, { merge: true });
+  const freshSnap = await db.collection("users").doc(uid).get();
+  return res.json({ user: serializeUser(freshSnap.data()) });
+});
 
-  const activity = activitySnap.empty
-    ? []
-    : activitySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+app.get("/dashboard", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    await refreshPendingCommissions(uid);
+    const [userSnap, statsSnap, activitySnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("stats").doc(uid).get(),
+      db.collection("users").doc(uid).collection("activity").orderBy("createdAt", "desc").limit(8).get(),
+    ]);
 
-  const downline = await buildDownline(uid, 4);
-  const networkTotal = downline.members.length;
+    const user = userSnap.data();
+    const stats = statsSnap.data() || {};
 
-  const responseStats = [
-    {
-      title: "Ganancias Totales",
-      value: formatUsd(stats.totalEarningsUsd ?? 0),
-      change: stats.totalEarningsUsd ? "+0%" : "Sin cambios",
-      variant: "emerald",
-    },
-    {
-      title: "Saldo Disponible",
-      value: formatUsd(stats.availableBalanceUsd ?? 0),
-      change:
-        (stats.availableBalanceUsd ?? 0) >= PAYOUT_MIN_USD
-          ? "Listo para pago"
-          : `Min. ${formatUsd(PAYOUT_MIN_USD)}`,
-      variant: "gold",
-    },
-    {
-      title: "Plan Actual",
-      value: plans.find((p) => p.id === (user?.plan || "basic"))?.name || "Basico",
-      change: "Activo",
-      variant: "default",
-    },
-    {
-      title: "Red Total",
-      value: `${networkTotal}`,
-      change: networkTotal ? "En crecimiento" : "Sin actividad",
-      variant: "default",
-    },
-  ];
+    const activity = activitySnap.empty
+      ? []
+      : activitySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
-  return res.json({
-    stats: responseStats,
-    recentActivity: activity,
-  });
+    const downline = await buildDownline(uid, 4);
+    const networkTotal = downline.members.length;
+
+    const responseStats = [
+      {
+        title: "Ganancias Totales",
+        value: formatUsd(stats.totalEarningsUsd ?? 0),
+        change: stats.totalEarningsUsd ? "+0%" : "Sin cambios",
+        variant: "emerald",
+      },
+      {
+        title: "Saldo Disponible",
+        value: formatUsd(stats.availableBalanceUsd ?? 0),
+        change:
+          (stats.availableBalanceUsd ?? 0) >= PAYOUT_MIN_USD
+            ? "Listo para pago"
+            : `Min. ${formatUsd(PAYOUT_MIN_USD)}`,
+        variant: "gold",
+      },
+      {
+        title: "Plan Actual",
+        value: plans.find((p) => p.id === (user?.plan || "basic"))?.name || "Basico",
+        change: "Activo",
+        variant: "default",
+      },
+      {
+        title: "Red Total",
+        value: `${networkTotal}`,
+        change: networkTotal ? "En crecimiento" : "Sin actividad",
+        variant: "default",
+      },
+    ];
+
+    return res.json({
+      stats: responseStats,
+      recentActivity: activity,
+    });
+  } catch (error) {
+    console.error("dashboard error:", error?.message || error);
+    return res.status(500).json({ error: "Failed to load dashboard" });
+  }
 });
 
 app.get("/tools", requireAuth, async (req, res) => {
