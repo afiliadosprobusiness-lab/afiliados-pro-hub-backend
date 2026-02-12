@@ -267,6 +267,7 @@ const serializeUser = (doc) => {
     email: doc.email || "",
     fullName: doc.fullName || "",
     plan: doc.plan || "basic",
+    status: doc.status || null,
     referralCode: doc.referralCode || "",
     referredBy: doc.referredBy || null,
     disabled: !!doc.disabled,
@@ -1089,6 +1090,7 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
   const schema = z
     .object({
       plan: z.enum(["basic", "pro", "elite"]).optional(),
+      status: z.enum(["TRIAL", "ACTIVE", "SUSPENDED"]).optional(),
       disabled: z.boolean().optional(),
       fullName: z.string().min(2).optional(),
     })
@@ -1098,7 +1100,7 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: "Invalid payload" });
   }
 
-  const { plan, disabled, fullName } = schema.data;
+  const { plan, status, disabled, fullName } = schema.data;
   const uid = req.params.uid;
 
   const targetSnap = await db.collection("users").doc(uid).get();
@@ -1107,13 +1109,24 @@ app.patch("/admin/users/:uid", requireAuth, requireAdmin, async (req, res) => {
     return res.status(403).json({ error: "Cannot modify owner account" });
   }
 
-  if (typeof disabled === "boolean") {
-    await auth.updateUser(uid, { disabled });
+  // Keep Firebase Auth disabled flag in sync when the admin changes status.
+  const computedDisabled =
+    typeof disabled === "boolean"
+      ? disabled
+      : status === "SUSPENDED"
+        ? true
+        : status === "ACTIVE" || status === "TRIAL"
+          ? false
+          : undefined;
+
+  if (typeof computedDisabled === "boolean") {
+    await auth.updateUser(uid, { disabled: computedDisabled });
   }
 
   const updateData = {
     ...(plan ? { plan } : {}),
-    ...(typeof disabled === "boolean" ? { disabled } : {}),
+    ...(status ? { status } : {}),
+    ...(typeof computedDisabled === "boolean" ? { disabled: computedDisabled } : {}),
     ...(fullName ? { fullName } : {}),
     updatedAt: FieldValue.serverTimestamp(),
   };
